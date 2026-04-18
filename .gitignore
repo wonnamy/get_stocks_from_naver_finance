@@ -1,0 +1,14 @@
+# Ignore runtime-generated data folders
+scraping/
+filtered/
+
+# Optional: Python cache and environment
+__pycache__/
+*.py[cod]
+venv/
+env/
+.venv/
+
+# Editor/IDE
+.vscode/
+.idea/
