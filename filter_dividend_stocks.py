@@ -26,6 +26,13 @@ RANKING_CSV = os.path.join(FILTERED_DIR, f"{DATE_PREFIX}_ranking_dividend_stocks
 today = datetime.date.today()
 last_dec_threshold = float(f"{str(today.year - 1)[-2:]}.12")   # e.g. 25.12
 
+# --------------------------------------------------
+# 필터 임계값 상수
+# --------------------------------------------------
+FLASH_DIV_RATIO     = 2.0   # 배당금/1년전 이 값 초과 시 배당 급등으로 판단
+MIN_OPPROFIT_GROWTH = 80.0  # 배당 급등을 정당화할 최소 영업이익증가율(%)
+MAX_PAYOUT_RATIO    = 80.0  # 배당성향 상한(%), 초과 시 지속 불가능한 배당으로 판단
+
 
 def clean_numeric(series: pd.Series) -> pd.Series:
     """쉼표 제거 후 float 변환. 변환 불가한 값은 NaN 반환."""
@@ -49,7 +56,7 @@ print(f"▶ 로딩 완료: {df.shape[0]}개 종목  ({INPUT_CSV})")
 # 숫자형 변환
 numeric_cols = [
     "시가총액", "매출액", "영업이익", "현재가",
-    "배당금", "ROE", "유보율", "기준월",
+    "배당금", "배당성향", "ROE", "유보율", "기준월",
     "1년전", "2년전", "3년전",
     "영업이익증가율", "매출액증가율",
 ]
@@ -78,10 +85,24 @@ before = df.shape[0]
 df = df[(df["1년전"] > 0) & (df["2년전"] > 0) & (df["3년전"] > 0)].copy()
 print(f"▶ 과거 3년 배당 없는 종목 제거: {before - df.shape[0]}개 제거 → {df.shape[0]}개 잔여")
 
-# 배당 안정성: 1년전이 2년전 대비 20% 이상 감소한 종목 제거
+# 배당 안정성: 배당금이 1년전 대비 20% 이상 감소한 종목 제거
 before = df.shape[0]
-df = df[df["1년전"] >= df["2년전"] * 0.8].copy()
-print(f"▶ 배당 안정성 (1년전 < 2년전×0.8) 제거: {before - df.shape[0]}개 제거 → {df.shape[0]}개 잔여")
+df = df[df["배당금"] >= df["1년전"] * 0.8].copy()
+print(f"▶ 배당 안정성 (배당금 < 1년전×0.8) 제거: {before - df.shape[0]}개 제거 → {df.shape[0]}개 잔여")
+
+# 반짝배당 필터: 배당금이 1년전 대비 FLASH_DIV_RATIO 배 초과 급등했는데
+# 영업이익증가율이 MIN_OPPROFIT_GROWTH% 미만이면 제거
+before = df.shape[0]
+div_jump = df["배당금"] / df["1년전"].replace(0, float("nan"))
+flash_mask = (div_jump > FLASH_DIV_RATIO) & (df["영업이익증가율"] < MIN_OPPROFIT_GROWTH)
+df = df[~flash_mask.fillna(False)].copy()
+print(f"▶ 반짝배당 (배당 {FLASH_DIV_RATIO}배↑ AND 영업이익증가율 < {MIN_OPPROFIT_GROWTH}%) 제거: {before - df.shape[0]}개 제거 → {df.shape[0]}개 잔여")
+
+# 배당성향 상한: 양수이며 MAX_PAYOUT_RATIO 초과 시 지속 불가능한 배당으로 제거
+# (배당성향 0 = 결측/해당없음 → 제거 대상 아님)
+before = df.shape[0]
+df = df[(df["배당성향"] <= MAX_PAYOUT_RATIO) | (df["배당성향"] <= 0)].copy()
+print(f"▶ 배당성향 > {MAX_PAYOUT_RATIO}% 제거: {before - df.shape[0]}개 제거 → {df.shape[0]}개 잔여")
 
 # 기준월이 작년 12월 이전인 종목 제거
 before = df.shape[0]
@@ -100,6 +121,12 @@ print("=" * 60)
 df["시가배당율"] = (
     df["배당금"] / df["현재가"].replace(0, float("nan")) * 100
 ).fillna(0)
+
+# 1년전·2년전·3년전 배당율(%) = 과거 배당금 / 현재가 * 100 (현재가 기준)
+_price = df["현재가"].replace(0, float("nan"))
+df["1년전배당율"] = (df["1년전"] / _price * 100).fillna(0)
+df["2년전배당율"] = (df["2년전"] / _price * 100).fillna(0)
+df["3년전배당율"] = (df["3년전"] / _price * 100).fillna(0)
 
 df = df.sort_values("시가배당율", ascending=False).reset_index(drop=True)
 
@@ -171,5 +198,6 @@ print(f"▶ 저장 완료: {OUTPUT_CSV}")
 print(f"▶ 최종 종목 수: {df.shape[0]}개")
 
 print("\n▶ 상위 10개 종목:")
-display_cols = ["종목명", "시가배당율", "배당금", "현재가", "시가총액", "ROE", "유보율", "기준월", "1년전", "2년전", "3년전"]
+display_cols = ["종목명", "시가배당율", "1년전배당율", "2년전배당율", "3년전배당율",
+                "배당금", "현재가", "시가총액", "ROE", "유보율", "기준월", "1년전", "2년전", "3년전"]
 print(df[display_cols].head(10).to_string(index=False))
